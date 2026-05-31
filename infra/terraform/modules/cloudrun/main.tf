@@ -11,6 +11,7 @@ resource "google_cloud_run_v2_service" "default" {
   name     = var.service_name
   location = var.region
   project  = var.project_id
+  ingress  = var.ingress
 
   scaling {
     max_instance_count = var.max_instance_count
@@ -85,6 +86,7 @@ resource "google_cloud_run_v2_service" "default" {
           network    = var.network
           subnetwork = var.subnet
         }
+        egress = var.egress
       }
     }
 
