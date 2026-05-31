@@ -42,7 +42,7 @@ variable "memory" {
 
 variable "startup_cpu_boost" {
   description = "Enable CPU boosting during startup"
-  type        = string
+  type        = bool
 }
 
 variable "cpu_idle" {
