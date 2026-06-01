@@ -1,0 +1,15 @@
+go 1.23.0
+
+use (
+	./packages/logger
+	./packages/config
+	./packages/auth-utils
+	./services/auth-service
+	./services/user-service
+	./services/chat-service
+	./services/message-service
+	./services/realtime-service
+	./services/notification-service
+	./services/secrets-service
+	./services/audit-service
+)

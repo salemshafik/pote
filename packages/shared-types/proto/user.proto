@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package pote.user.v1;
+
+option go_package = "github.com/salemshafik/pote/packages/shared-types/gen/go/user/v1";
+
+// User represents a registered user in Pote.
+message User {
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+  string avatar_url = 4;
+  string status = 5;           // online, offline, away
+  string created_at = 6;       // RFC 3339 timestamp
+  string updated_at = 7;
+}
+
+// Contact represents a user's contact relationship.
+message Contact {
+  string id = 1;
+  string user_id = 2;
+  string contact_user_id = 3;
+  string nickname = 4;
+  string created_at = 5;
+}

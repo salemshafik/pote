@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package pote.message.v1;
+
+option go_package = "github.com/salemshafik/pote/packages/shared-types/gen/go/message/v1";
+
+// MessageType identifies the kind of message content.
+enum MessageType {
+  MESSAGE_TYPE_UNSPECIFIED = 0;
+  MESSAGE_TYPE_TEXT = 1;
+  MESSAGE_TYPE_AI_RESPONSE = 2;
+  MESSAGE_TYPE_SYSTEM = 3;     // e.g., "ChatGPT joined the chat"
+}
+
+// Message represents a single message in a chat.
+message Message {
+  string id = 1;
+  string chat_id = 2;
+  string sender_id = 3;        // User ID or AI model identifier
+  string content = 4;
+  MessageType type = 5;
+  string ai_model = 6;         // e.g., "chatgpt", "claude", "gemini" (empty for human messages)
+  string created_at = 7;
+  string updated_at = 8;
+  bool is_edited = 9;
+  repeated string read_by = 10; // User IDs who have read this message
+}

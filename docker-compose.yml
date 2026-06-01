@@ -1,0 +1,47 @@
+# ============================================================
+# Pote - Local Development Docker Compose
+# ============================================================
+# Usage: docker compose up -d
+# This spins up infrastructure dependencies for local dev.
+# Services themselves are run directly (go run / uvicorn / pnpm dev).
+
+services:
+  # ---------- PostgreSQL ----------
+  postgres:
+    image: postgres:16-alpine
+    container_name: pote-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pote}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pote_dev_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pote"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---------- Redis ----------
+  redis:
+    image: redis:7-alpine
+    container_name: pote-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
