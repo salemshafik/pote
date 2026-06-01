@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package pote.chat.v1;
+
+option go_package = "github.com/salemshafik/pote/packages/shared-types/gen/go/chat/v1";
+
+// ChatType distinguishes between direct and group chats.
+enum ChatType {
+  CHAT_TYPE_UNSPECIFIED = 0;
+  CHAT_TYPE_DIRECT = 1;
+  CHAT_TYPE_GROUP = 2;
+}
+
+// MemberRole defines the role a user has within a group chat.
+enum MemberRole {
+  MEMBER_ROLE_UNSPECIFIED = 0;
+  MEMBER_ROLE_MEMBER = 1;
+  MEMBER_ROLE_ADMIN = 2;
+  MEMBER_ROLE_OWNER = 3;
+}
+
+// Chat represents a conversation (direct or group).
+message Chat {
+  string id = 1;
+  ChatType type = 2;
+  string name = 3;             // Only for group chats
+  string description = 4;      // Only for group chats
+  string avatar_url = 5;
+  string created_by = 6;       // User ID of creator
+  string created_at = 7;
+  string updated_at = 8;
+  repeated ChatMember members = 9;
+}
+
+// ChatMember represents a participant in a chat.
+message ChatMember {
+  string user_id = 1;
+  MemberRole role = 2;
+  string joined_at = 3;
+}
