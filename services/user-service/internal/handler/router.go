@@ -10,7 +10,8 @@ import (
 )
 
 // NewRouter creates and configures the chi router with all user-service routes.
-func NewRouter(userHandler *UserHandler, jwtSecret string) http.Handler {
+// Protected routes are guarded by the shared authutils JWT middleware.
+func NewRouter(userHandler *UserHandler, jwtSecret, frontendURL string) http.Handler {
 	r := chi.NewRouter()
 
 	// Global middleware
@@ -19,7 +20,7 @@ func NewRouter(userHandler *UserHandler, jwtSecret string) http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Heartbeat("/health"))
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedOrigins:   []string{frontendURL},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
@@ -27,28 +28,32 @@ func NewRouter(userHandler *UserHandler, jwtSecret string) http.Handler {
 		MaxAge:           300,
 	}))
 
-	// Internal routes (service-to-service, no JWT auth)
-	r.Route("/internal/v1", func(r chi.Router) {
-		r.Post("/users/sync", userHandler.SyncProfile)
-	})
+	r.Route("/api/v1/users", func(r chi.Router) {
+		// Internal provisioning (service-to-service). Created without the
+		// user JWT because the user does not exist in this service yet.
+		r.Post("/", userHandler.CreateProfile)
 
-	// Public routes (require JWT auth)
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(authutils.AuthMiddleware(jwtSecret))
+		// Protected routes — require a valid access token.
+		r.Group(func(r chi.Router) {
+			r.Use(authutils.AuthMiddleware(jwtSecret))
 
-		// User profile routes
-		r.Get("/users/me", userHandler.GetMe)
-		r.Put("/users/me", userHandler.UpdateMe)
-		r.Get("/users/search", userHandler.SearchUsers)
-		r.Get("/users/{id}", userHandler.GetUser)
+			// Self profile
+			r.Get("/me", userHandler.GetMe)
+			r.Put("/me", userHandler.UpdateMe)
+			r.Put("/me/status", userHandler.UpdateStatus)
 
-		// Contact routes
-		r.Get("/contacts", userHandler.ListContacts)
-		r.Post("/contacts", userHandler.AddContact)
-		r.Delete("/contacts/{id}", userHandler.RemoveContact)
+			// Contacts
+			r.Get("/me/contacts", userHandler.ListContacts)
+			r.Post("/me/contacts", userHandler.AddContact)
+			r.Delete("/me/contacts/{contactID}", userHandler.RemoveContact)
 
-		// Invite routes
-		r.Post("/invites", userHandler.SendInvite)
+			// Invites
+			r.Get("/me/invites", userHandler.ListInvites)
+			r.Post("/me/invites", userHandler.CreateInvite)
+
+			// Public profile lookup by ID (kept last so it doesn't shadow /me).
+			r.Get("/{id}", userHandler.GetProfile)
+		})
 	})
 
 	return r

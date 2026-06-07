@@ -5,15 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	authutils "github.com/salemshafik/pote/packages/auth-utils"
 	"github.com/salemshafik/pote/services/user-service/internal/model"
+	"github.com/salemshafik/pote/services/user-service/internal/repository"
 	"github.com/salemshafik/pote/services/user-service/internal/service"
 )
 
-// UserHandler handles HTTP requests for user-related endpoints.
+// UserHandler handles HTTP requests for user profile, contact, and invite endpoints.
 type UserHandler struct {
 	userService *service.UserService
 }
@@ -23,15 +23,47 @@ func NewUserHandler(userService *service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
-// GetMe handles GET /api/v1/users/me
-func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
-	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
+// ---- Profiles ----
+
+// CreateProfile handles POST /api/v1/users
+// Intended for internal service-to-service provisioning (e.g., from auth-service).
+func (h *UserHandler) CreateProfile(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
 		return
 	}
 
+	profile, err := h.userService.CreateProfile(r.Context(), &req)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, profile)
+}
+
+// GetMe handles GET /api/v1/users/me
+func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
+	userID := authutils.UserIDFromContext(r.Context())
 	profile, err := h.userService.GetProfile(r.Context(), userID)
+	if err != nil {
+		h.handleError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, profile)
+}
+
+// GetProfile handles GET /api/v1/users/{id}
+func (h *UserHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "MISSING_ID", "User ID is required")
+		return
+	}
+
+	profile, err := h.userService.GetProfile(r.Context(), id)
 	if err != nil {
 		h.handleError(w, err)
 		return
@@ -43,10 +75,6 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 // UpdateMe handles PUT /api/v1/users/me
 func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
-		return
-	}
 
 	var req model.UpdateProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -63,89 +91,43 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
-// GetUser handles GET /api/v1/users/{id}
-func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "MISSING_ID", "User ID is required")
-		return
-	}
+// UpdateStatus handles PUT /api/v1/users/me/status
+func (h *UserHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
+	userID := authutils.UserIDFromContext(r.Context())
 
-	profile, err := h.userService.GetProfile(r.Context(), id)
-	if err != nil {
-		h.handleError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, profile)
-}
-
-// SearchUsers handles GET /api/v1/users/search?q=&limit=&offset=
-func (h *UserHandler) SearchUsers(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-
-	profiles, total, err := h.userService.SearchUsers(r.Context(), query, limit, offset)
-	if err != nil {
-		h.handleError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, model.PaginatedResponse{
-		Items:   profiles,
-		Total:   total,
-		HasMore: offset+len(profiles) < total,
-	})
-}
-
-// SyncProfile handles POST /internal/v1/users/sync
-// Internal endpoint called by auth-service to create/update profiles.
-func (h *UserHandler) SyncProfile(w http.ResponseWriter, r *http.Request) {
-	var req model.CreateProfileRequest
+	var req model.UpdateStatusRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
 		return
 	}
 
-	if req.ID == "" || req.Email == "" || req.DisplayName == "" {
-		writeError(w, http.StatusBadRequest, "MISSING_FIELDS", "id, email, and display_name are required")
-		return
-	}
-
-	profile, err := h.userService.SyncProfile(r.Context(), &req)
+	profile, err := h.userService.UpdateStatus(r.Context(), userID, &req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "Failed to sync profile")
+		h.handleError(w, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, profile)
 }
 
-// ListContacts handles GET /api/v1/contacts
+// ---- Contacts ----
+
+// ListContacts handles GET /api/v1/users/me/contacts
 func (h *UserHandler) ListContacts(w http.ResponseWriter, r *http.Request) {
 	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
-		return
-	}
 
 	contacts, err := h.userService.ListContacts(r.Context(), userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "INTERNAL", "Failed to list contacts")
+		h.handleError(w, err)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, contacts)
 }
 
-// AddContact handles POST /api/v1/contacts
+// AddContact handles POST /api/v1/users/me/contacts
 func (h *UserHandler) AddContact(w http.ResponseWriter, r *http.Request) {
 	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
-		return
-	}
 
 	var req model.AddContactRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -162,19 +144,10 @@ func (h *UserHandler) AddContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, contact)
 }
 
-// RemoveContact handles DELETE /api/v1/contacts/{id}
+// RemoveContact handles DELETE /api/v1/users/me/contacts/{contactID}
 func (h *UserHandler) RemoveContact(w http.ResponseWriter, r *http.Request) {
 	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
-		return
-	}
-
-	contactID := chi.URLParam(r, "id")
-	if contactID == "" {
-		writeError(w, http.StatusBadRequest, "MISSING_ID", "Contact ID is required")
-		return
-	}
+	contactID := chi.URLParam(r, "contactID")
 
 	if err := h.userService.RemoveContact(r.Context(), userID, contactID); err != nil {
 		h.handleError(w, err)
@@ -184,21 +157,32 @@ func (h *UserHandler) RemoveContact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"message": "contact removed"})
 }
 
-// SendInvite handles POST /api/v1/invites
-func (h *UserHandler) SendInvite(w http.ResponseWriter, r *http.Request) {
+// ---- Invites ----
+
+// ListInvites handles GET /api/v1/users/me/invites
+func (h *UserHandler) ListInvites(w http.ResponseWriter, r *http.Request) {
 	userID := authutils.UserIDFromContext(r.Context())
-	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "UNAUTHORIZED", "Authentication required")
+
+	invites, err := h.userService.ListInvites(r.Context(), userID)
+	if err != nil {
+		h.handleError(w, err)
 		return
 	}
 
-	var req model.SendInviteRequest
+	writeJSON(w, http.StatusOK, invites)
+}
+
+// CreateInvite handles POST /api/v1/users/me/invites
+func (h *UserHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	userID := authutils.UserIDFromContext(r.Context())
+
+	var req model.CreateInviteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "INVALID_BODY", "Invalid request body")
 		return
 	}
 
-	invite, err := h.userService.SendInvite(r.Context(), userID, &req)
+	invite, err := h.userService.CreateInvite(r.Context(), userID, &req)
 	if err != nil {
 		h.handleError(w, err)
 		return
@@ -207,25 +191,41 @@ func (h *UserHandler) SendInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, invite)
 }
 
-// handleError maps service errors to HTTP responses.
+// handleError maps service/repository errors to appropriate HTTP responses.
 func (h *UserHandler) handleError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, service.ErrProfileNotFound):
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "User not found")
-	case errors.Is(err, service.ErrContactNotFound):
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "Contact not found")
-	case errors.Is(err, service.ErrCannotAddSelf):
-		writeError(w, http.StatusBadRequest, "CANNOT_ADD_SELF", err.Error())
-	case errors.Is(err, service.ErrContactExists):
-		writeError(w, http.StatusConflict, "CONTACT_EXISTS", err.Error())
-	case errors.Is(err, service.ErrEmptyContactID):
-		writeError(w, http.StatusBadRequest, "MISSING_CONTACT_ID", err.Error())
-	case errors.Is(err, service.ErrEmptyQuery):
-		writeError(w, http.StatusBadRequest, "EMPTY_QUERY", err.Error())
+	// Validation (400)
 	case errors.Is(err, service.ErrInvalidEmail):
 		writeError(w, http.StatusBadRequest, "INVALID_EMAIL", err.Error())
-	case errors.Is(err, service.ErrAlreadyRegistered):
-		writeError(w, http.StatusConflict, "ALREADY_REGISTERED", err.Error())
+	case errors.Is(err, service.ErrEmptyDisplayName):
+		writeError(w, http.StatusBadRequest, "MISSING_NAME", err.Error())
+	case errors.Is(err, service.ErrDisplayNameTooLong):
+		writeError(w, http.StatusBadRequest, "NAME_TOO_LONG", err.Error())
+	case errors.Is(err, service.ErrInvalidStatus):
+		writeError(w, http.StatusBadRequest, "INVALID_STATUS", err.Error())
+	case errors.Is(err, service.ErrMissingContactID):
+		writeError(w, http.StatusBadRequest, "MISSING_CONTACT_ID", err.Error())
+	case errors.Is(err, repository.ErrSelfContact):
+		writeError(w, http.StatusBadRequest, "SELF_CONTACT", err.Error())
+	case errors.Is(err, service.ErrCannotInviteSelf):
+		writeError(w, http.StatusBadRequest, "SELF_INVITE", err.Error())
+
+	// Not found (404)
+	case errors.Is(err, repository.ErrProfileNotFound):
+		writeError(w, http.StatusNotFound, "PROFILE_NOT_FOUND", "User profile not found")
+	case errors.Is(err, repository.ErrContactNotFound):
+		writeError(w, http.StatusNotFound, "CONTACT_NOT_FOUND", "Contact not found")
+	case errors.Is(err, repository.ErrInviteNotFound):
+		writeError(w, http.StatusNotFound, "INVITE_NOT_FOUND", "Invite not found")
+
+	// Conflict (409)
+	case errors.Is(err, repository.ErrProfileExists):
+		writeError(w, http.StatusConflict, "PROFILE_EXISTS", "A profile already exists for this user")
+	case errors.Is(err, repository.ErrContactExists):
+		writeError(w, http.StatusConflict, "CONTACT_EXISTS", "This contact has already been added")
+	case errors.Is(err, repository.ErrInviteAlreadyExists):
+		writeError(w, http.StatusConflict, "INVITE_EXISTS", "A pending invite already exists for this email")
+
 	default:
 		writeError(w, http.StatusInternalServerError, "INTERNAL", "An unexpected error occurred")
 	}

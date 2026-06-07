@@ -40,7 +40,7 @@ This project follows a monorepo structure. All microservices, frontend applicati
 │   ├── logger/                   # Standardized structured logging
 │   ├── config/                   # Environment variable parsing
 │   └── auth-utils/               # JWT validation middleware shared across Go services
-├── infrastructure/               # Infrastructure as Code
+├── infra/                        # Infrastructure as Code
 │   ├── terraform/                
 │   │   ├── modules/              # Reusable TF modules (Cloud Run, PubSub, etc.)
 │   │   └── envs/

@@ -4,8 +4,9 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/mail"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/salemshafik/pote/packages/logger"
 	"github.com/salemshafik/pote/services/user-service/internal/model"
@@ -14,201 +15,219 @@ import (
 
 // Service errors.
 var (
-	ErrInvalidEmail     = errors.New("invalid email address")
-	ErrEmptyQuery       = errors.New("search query is required")
-	ErrEmptyContactID   = errors.New("contact_id is required")
-	ErrProfileNotFound  = errors.New("user profile not found")
-	ErrContactNotFound  = errors.New("contact not found")
-	ErrCannotAddSelf    = errors.New("cannot add yourself as a contact")
-	ErrContactExists    = errors.New("contact already exists")
-	ErrAlreadyRegistered = errors.New("user is already registered, add them as a contact instead")
+	ErrInvalidEmail       = errors.New("invalid email address")
+	ErrEmptyDisplayName   = errors.New("display name is required")
+	ErrDisplayNameTooLong = errors.New("display name must be at most 100 characters")
+	ErrInvalidStatus      = errors.New("invalid status")
+	ErrMissingContactID   = errors.New("contact_id is required")
+	ErrCannotInviteSelf   = errors.New("cannot invite your own email address")
 )
 
 // UserService handles user profile, contact, and invite business logic.
 type UserService struct {
-	profileRepo *repository.ProfileRepository
-	contactRepo *repository.ContactRepository
-	inviteRepo  *repository.InviteRepository
-	log         *logger.Logger
+	profiles *repository.ProfileRepository
+	contacts *repository.ContactRepository
+	invites  *repository.InviteRepository
+	log      *logger.Logger
 }
 
 // NewUserService creates a new UserService.
 func NewUserService(
-	profileRepo *repository.ProfileRepository,
-	contactRepo *repository.ContactRepository,
-	inviteRepo *repository.InviteRepository,
+	profiles *repository.ProfileRepository,
+	contacts *repository.ContactRepository,
+	invites *repository.InviteRepository,
 	log *logger.Logger,
 ) *UserService {
 	return &UserService{
-		profileRepo: profileRepo,
-		contactRepo: contactRepo,
-		inviteRepo:  inviteRepo,
-		log:         log,
+		profiles: profiles,
+		contacts: contacts,
+		invites:  invites,
+		log:      log,
 	}
 }
 
-// ---- Profile Operations ----
+// ---- Profiles ----
 
-// GetProfile retrieves a user profile by ID.
-func (s *UserService) GetProfile(ctx context.Context, userID string) (*model.UserProfile, error) {
-	profile, err := s.profileRepo.GetByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProfileNotFound) {
-			return nil, ErrProfileNotFound
-		}
-		return nil, fmt.Errorf("fetching profile: %w", err)
+// CreateProfile provisions a new profile. The ID must match the auth-service
+// users.id UUID so identities stay aligned across services.
+func (s *UserService) CreateProfile(ctx context.Context, req *model.CreateProfileRequest) (*model.UserProfile, error) {
+	if req.ID == "" {
+		return nil, repository.ErrProfileNotFound // caller must supply the auth UUID
 	}
-	return profile, nil
-}
-
-// UpdateProfile updates the current user's profile.
-func (s *UserService) UpdateProfile(ctx context.Context, userID string, req *model.UpdateProfileRequest) (*model.UserProfile, error) {
-	profile, err := s.profileRepo.Update(ctx, userID, req)
-	if err != nil {
-		if errors.Is(err, repository.ErrProfileNotFound) {
-			return nil, ErrProfileNotFound
-		}
-		return nil, fmt.Errorf("updating profile: %w", err)
-	}
-
-	s.log.Info("profile updated", "user_id", userID)
-	return profile, nil
-}
-
-// SyncProfile creates or updates a profile from auth-service data.
-// Called internally when a user registers or logs in.
-func (s *UserService) SyncProfile(ctx context.Context, req *model.CreateProfileRequest) (*model.UserProfile, error) {
-	profile := &model.UserProfile{
-		ID:          req.ID,
-		Email:       req.Email,
-		DisplayName: req.DisplayName,
-		AvatarURL:   req.AvatarURL,
-	}
-
-	upserted, err := s.profileRepo.Upsert(ctx, profile)
-	if err != nil {
-		return nil, fmt.Errorf("syncing profile: %w", err)
-	}
-
-	s.log.Info("profile synced", "user_id", upserted.ID)
-	return upserted, nil
-}
-
-// SearchUsers finds user profiles matching a query string.
-func (s *UserService) SearchUsers(ctx context.Context, query string, limit, offset int) ([]*model.UserProfile, int, error) {
-	if query == "" {
-		return nil, 0, ErrEmptyQuery
-	}
-
-	if limit <= 0 || limit > 50 {
-		limit = 20
-	}
-	if offset < 0 {
-		offset = 0
-	}
-
-	profiles, total, err := s.profileRepo.Search(ctx, query, limit, offset)
-	if err != nil {
-		return nil, 0, fmt.Errorf("searching users: %w", err)
-	}
-
-	return profiles, total, nil
-}
-
-// ---- Contact Operations ----
-
-// ListContacts returns all contacts for a user.
-func (s *UserService) ListContacts(ctx context.Context, ownerID string) ([]*model.ContactWithProfile, error) {
-	contacts, err := s.contactRepo.ListByOwner(ctx, ownerID)
-	if err != nil {
-		return nil, fmt.Errorf("listing contacts: %w", err)
-	}
-	return contacts, nil
-}
-
-// AddContact adds a user as a contact.
-func (s *UserService) AddContact(ctx context.Context, ownerID string, req *model.AddContactRequest) (*model.Contact, error) {
-	if req.ContactID == "" {
-		return nil, ErrEmptyContactID
-	}
-
-	if ownerID == req.ContactID {
-		return nil, ErrCannotAddSelf
-	}
-
-	// Verify the contact user exists
-	_, err := s.profileRepo.GetByID(ctx, req.ContactID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProfileNotFound) {
-			return nil, ErrProfileNotFound
-		}
-		return nil, fmt.Errorf("verifying contact user: %w", err)
-	}
-
-	contact, err := s.contactRepo.Create(ctx, ownerID, req.ContactID, req.Nickname)
-	if err != nil {
-		if errors.Is(err, repository.ErrContactAlreadyExists) {
-			return nil, ErrContactExists
-		}
-		if errors.Is(err, repository.ErrCannotAddSelf) {
-			return nil, ErrCannotAddSelf
-		}
-		return nil, fmt.Errorf("adding contact: %w", err)
-	}
-
-	s.log.Info("contact added", "owner_id", ownerID, "contact_id", req.ContactID)
-	return contact, nil
-}
-
-// RemoveContact removes a contact by its record ID.
-func (s *UserService) RemoveContact(ctx context.Context, ownerID, contactRecordID string) error {
-	if err := s.contactRepo.Delete(ctx, ownerID, contactRecordID); err != nil {
-		if errors.Is(err, repository.ErrContactNotFound) {
-			return ErrContactNotFound
-		}
-		return fmt.Errorf("removing contact: %w", err)
-	}
-
-	s.log.Info("contact removed", "owner_id", ownerID, "contact_record_id", contactRecordID)
-	return nil
-}
-
-// ---- Invite Operations ----
-
-// SendInvite creates an email invite for a non-registered user.
-func (s *UserService) SendInvite(ctx context.Context, inviterID string, req *model.SendInviteRequest) (*model.Invite, error) {
 	if err := validateEmail(req.Email); err != nil {
 		return nil, err
 	}
+	if err := validateDisplayName(req.DisplayName); err != nil {
+		return nil, err
+	}
 
-	// Check if the email is already registered
-	profiles, _, err := s.profileRepo.Search(ctx, req.Email, 1, 0)
+	profile := &model.UserProfile{
+		ID:          req.ID,
+		Email:       strings.TrimSpace(req.Email),
+		DisplayName: strings.TrimSpace(req.DisplayName),
+		AvatarURL:   req.AvatarURL,
+		Status:      model.StatusOffline,
+	}
+
+	created, err := s.profiles.Create(ctx, profile)
 	if err != nil {
-		return nil, fmt.Errorf("checking existing user: %w", err)
-	}
-	if len(profiles) > 0 && profiles[0].Email == req.Email {
-		return nil, ErrAlreadyRegistered
+		return nil, err
 	}
 
-	invite, err := s.inviteRepo.Create(ctx, inviterID, req.Email)
-	if err != nil {
-		return nil, fmt.Errorf("creating invite: %w", err)
-	}
-
-	// TODO: Publish event to notification-service to send the invite email
-	s.log.Info("invite sent", "inviter_id", inviterID, "email", req.Email, "invite_id", invite.ID)
-
-	return invite, nil
+	s.log.Info("profile created", "user_id", created.ID, "email", created.Email)
+	return created, nil
 }
 
-// validateEmail checks if an email address is valid.
+// GetProfile fetches a profile by ID.
+func (s *UserService) GetProfile(ctx context.Context, id string) (*model.UserProfile, error) {
+	return s.profiles.GetByID(ctx, id)
+}
+
+// UpdateProfile updates the authenticated user's own profile.
+func (s *UserService) UpdateProfile(ctx context.Context, userID string, req *model.UpdateProfileRequest) (*model.UserProfile, error) {
+	if req.DisplayName != nil {
+		if err := validateDisplayName(*req.DisplayName); err != nil {
+			return nil, err
+		}
+		trimmed := strings.TrimSpace(*req.DisplayName)
+		req.DisplayName = &trimmed
+	}
+
+	updated, err := s.profiles.Update(ctx, userID, req)
+	if err != nil {
+		return nil, err
+	}
+
+	s.log.Info("profile updated", "user_id", userID)
+	return updated, nil
+}
+
+// UpdateStatus updates the authenticated user's presence status.
+func (s *UserService) UpdateStatus(ctx context.Context, userID string, req *model.UpdateStatusRequest) (*model.UserProfile, error) {
+	if !isValidStatus(req.Status) {
+		return nil, ErrInvalidStatus
+	}
+
+	updated, err := s.profiles.UpdateStatus(ctx, userID, req.Status)
+	if err != nil {
+		return nil, err
+	}
+
+	return updated, nil
+}
+
+// ---- Contacts ----
+
+// AddContact adds a contact for the authenticated user.
+func (s *UserService) AddContact(ctx context.Context, ownerID string, req *model.AddContactRequest) (*model.Contact, error) {
+	if req.ContactID == "" {
+		return nil, ErrMissingContactID
+	}
+	if req.ContactID == ownerID {
+		return nil, repository.ErrSelfContact
+	}
+
+	contact := &model.Contact{
+		OwnerID:   ownerID,
+		ContactID: req.ContactID,
+		Nickname:  strings.TrimSpace(req.Nickname),
+	}
+
+	created, err := s.contacts.Create(ctx, contact)
+	if err != nil {
+		return nil, err
+	}
+
+	s.log.Info("contact added", "owner_id", ownerID, "contact_id", req.ContactID)
+	return created, nil
+}
+
+// ListContacts returns all contacts owned by the authenticated user.
+func (s *UserService) ListContacts(ctx context.Context, ownerID string) ([]model.Contact, error) {
+	return s.contacts.ListByOwner(ctx, ownerID)
+}
+
+// RemoveContact deletes a contact owned by the authenticated user.
+func (s *UserService) RemoveContact(ctx context.Context, ownerID, contactID string) error {
+	if contactID == "" {
+		return ErrMissingContactID
+	}
+	return s.contacts.Delete(ctx, ownerID, contactID)
+}
+
+// ---- Invites ----
+
+// CreateInvite sends an email invitation on behalf of the authenticated user.
+func (s *UserService) CreateInvite(ctx context.Context, inviterID string, req *model.CreateInviteRequest) (*model.Invite, error) {
+	if err := validateEmail(req.Email); err != nil {
+		return nil, err
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+
+	// Prevent inviting your own registered email.
+	if profile, err := s.profiles.GetByID(ctx, inviterID); err == nil {
+		if strings.EqualFold(profile.Email, email) {
+			return nil, ErrCannotInviteSelf
+		}
+	}
+
+	// Avoid duplicate pending invites for the same email.
+	exists, err := s.invites.ExistsPending(ctx, inviterID, email)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, repository.ErrInviteAlreadyExists
+	}
+
+	invite := &model.Invite{
+		InviterID: inviterID,
+		Email:     email,
+		Status:    model.InviteStatusPending,
+	}
+
+	created, err := s.invites.Create(ctx, invite)
+	if err != nil {
+		return nil, err
+	}
+
+	s.log.Info("invite created", "inviter_id", inviterID, "email", email)
+	return created, nil
+}
+
+// ListInvites returns all invites sent by the authenticated user.
+func (s *UserService) ListInvites(ctx context.Context, inviterID string) ([]model.Invite, error) {
+	return s.invites.ListByInviter(ctx, inviterID)
+}
+
+// ---- Validation helpers ----
+
 func validateEmail(email string) error {
-	if email == "" {
+	if strings.TrimSpace(email) == "" {
 		return ErrInvalidEmail
 	}
-	_, err := mail.ParseAddress(email)
-	if err != nil {
+	if _, err := mail.ParseAddress(email); err != nil {
 		return ErrInvalidEmail
 	}
 	return nil
+}
+
+func validateDisplayName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ErrEmptyDisplayName
+	}
+	if utf8.RuneCountInString(trimmed) > 100 {
+		return ErrDisplayNameTooLong
+	}
+	return nil
+}
+
+func isValidStatus(status string) bool {
+	switch status {
+	case model.StatusOnline, model.StatusOffline, model.StatusAway, model.StatusBusy:
+		return true
+	default:
+		return false
+	}
 }

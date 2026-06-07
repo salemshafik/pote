@@ -1,6 +1,5 @@
 // Package main is the entry point for the Pote user-service.
-// This service handles user profiles, contacts management,
-// user search, and email invite functionality.
+// This service manages user profiles, contacts, and email invitations.
 package main
 
 import (
@@ -26,8 +25,9 @@ func main() {
 	svcCfg := config.LoadServiceConfig(loader, 8082)
 	dbCfg := config.LoadDatabaseConfig(loader, "USER_DB_NAME")
 
-	// JWT secret (for validating tokens from auth-service)
+	// JWT secret is required to validate access tokens issued by auth-service.
 	jwtSecret := loader.String("JWT_SECRET")
+	frontendURL := loader.String("FRONTEND_URL", "http://localhost:3000")
 
 	loader.MustValidate()
 
@@ -55,7 +55,7 @@ func main() {
 	userHandler := handler.NewUserHandler(userService)
 
 	// ---- Router ----
-	router := handler.NewRouter(userHandler, jwtSecret)
+	router := handler.NewRouter(userHandler, jwtSecret, frontendURL)
 
 	// ---- HTTP Server ----
 	addr := fmt.Sprintf(":%d", svcCfg.Port)
