@@ -34,10 +34,10 @@ type ContactWithProfile struct {
 
 // Invite represents an email invitation sent to a non-registered user.
 type Invite struct {
-	ID          string    `json:"id"`
-	InviterID   string    `json:"inviter_id"` // The user who sent the invite
-	Email       string    `json:"email"`       // Email of the invitee
-	Status      string    `json:"status"`      // "pending", "accepted", "expired"
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ID        string    `json:"id"`
+	InviterID string    `json:"inviter_id"` // The user who sent the invite
+	Email     string    `json:"email"`      // Email of the invitee
+	Status    string    `json:"status"`     // "pending", "accepted", "expired"
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
